@@ -1,0 +1,372 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0b0f19;
+  --foreground: #e2e8f0;
+  --color-hazard: #dc2626;
+}
+
+/* Medidor de peligro: el nivel vive en un atributo y sólo redefine cuatro
+   variables, así el cambio de clima se propaga a header, marcos y botones sin
+   reescribir cada clase de Tailwind. Al ser un selector de atributo, cada
+   escena puede declarar el suyo y conservar el color que tenía cuando pasó. */
+[data-danger="SEGURO"] {
+  --danger-accent: #10b981;
+  --danger-border: rgba(16, 185, 129, 0.3);
+  --danger-glow: rgba(16, 185, 129, 0.4);
+  --danger-soft: rgba(16, 185, 129, 0.12);
+}
+
+[data-danger="MEDIO"] {
+  --danger-accent: #f59e0b;
+  --danger-border: rgba(245, 158, 11, 0.35);
+  --danger-glow: rgba(245, 158, 11, 0.4);
+  --danger-soft: rgba(245, 158, 11, 0.12);
+}
+
+[data-danger="ALTO"] {
+  --danger-accent: #f97316;
+  --danger-border: rgba(249, 115, 22, 0.45);
+  --danger-glow: rgba(249, 115, 22, 0.5);
+  --danger-soft: rgba(249, 115, 22, 0.14);
+}
+
+[data-danger="EXTREMO"] {
+  --danger-accent: #ef4444;
+  --danger-border: rgba(239, 68, 68, 0.6);
+  --danger-glow: rgba(239, 68, 68, 0.6);
+  --danger-soft: rgba(239, 68, 68, 0.16);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  /* Nombres de token de Tailwind distintos de las variables runtime que
+     inyecta next/font (--font-pixel / --font-body) para evitar cualquier
+     referencia circular en las custom properties. */
+  --font-heading: var(--font-pixel);
+  --font-sans: var(--font-body);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Evita que las ilustraciones pixel art se vean borrosas al escalarlas. */
+.pixelated {
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
+/* Scanlines sutiles estilo CRT sobre los paneles de imagen. */
+.scanlines {
+  position: relative;
+  isolation: isolate;
+}
+
+.scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.18) 0px,
+    rgba(0, 0, 0, 0.18) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* Grano/ruido fijo sobre toda la página: señal de transmisión decadente. */
+.grain-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Viñeta: oscurece los bordes de la pantalla, clima cinematográfico. */
+.vignette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 45%,
+    rgba(0, 0, 0, 0.55) 100%
+  );
+}
+
+/* Franja tipo cinta de peligro (ámbar/negro), usada como divisor. */
+.hazard-stripes {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(245, 158, 11, 0.55) 0px,
+    rgba(245, 158, 11, 0.55) 10px,
+    rgba(10, 10, 10, 0.55) 10px,
+    rgba(10, 10, 10, 0.55) 20px
+  );
+}
+
+/* "Sin señal": ruido de estática animado para paneles de imagen sin foto. */
+.tv-static {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='s'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23s)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+.tv-static-live {
+  animation: static-shift 0.4s steps(4) infinite;
+}
+
+@keyframes static-shift {
+  0% {
+    background-position: 0 0;
+  }
+  25% {
+    background-position: -45px 20px;
+  }
+  50% {
+    background-position: 30px -30px;
+  }
+  75% {
+    background-position: -20px 40px;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+/* Cursor parpadeante al final del texto que está streameando. */
+.stream-cursor::after {
+  content: "▌";
+  display: inline-block;
+  margin-left: 2px;
+  color: #10b981;
+  animation: blink 0.9s steps(1) infinite;
+}
+
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Scrollbar temática (slate / verde tóxico). */
+* {
+  scrollbar-color: #10b98166 #0b0f19;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0b0f19;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #10b98166;
+  border-radius: 9999px;
+  border: 2px solid #0b0f19;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #10b981aa;
+}
+
+@keyframes flicker {
+  0%,
+  93%,
+  100% {
+    opacity: 1;
+    filter: none;
+  }
+  94% {
+    opacity: 0.6;
+    filter: blur(0.3px);
+  }
+  95% {
+    opacity: 1;
+  }
+  96% {
+    opacity: 0.75;
+  }
+  97% {
+    opacity: 1;
+  }
+}
+
+.title-flicker {
+  animation: flicker 7s infinite;
+}
+
+/* Efectos de estado sobre el panel de imagen. Se apilan: podés estar
+   infectado, sangrando y agonizando al mismo tiempo, y se nota.
+
+   Vida crítica y sangrado comparten el ::before del panel (el ::after ya lo
+   usan las scanlines), así que en vez de pisarse se apilan como capas de una
+   misma imagen de fondo: cada efecto sólo define su variable. */
+.fx-lowhealth,
+.fx-bleeding {
+  --fx-critical: none;
+  --fx-blood: none;
+}
+
+.fx-lowhealth {
+  --fx-critical: radial-gradient(
+    ellipse at center,
+    transparent 35%,
+    rgba(190, 18, 18, 0.5) 100%
+  );
+}
+
+.fx-bleeding {
+  --fx-blood: linear-gradient(
+    to top,
+    rgba(153, 27, 27, 0.45) 0%,
+    rgba(153, 27, 27, 0.12) 25%,
+    transparent 55%
+  );
+}
+
+.fx-lowhealth::before,
+.fx-bleeding::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image: var(--fx-critical), var(--fx-blood);
+}
+
+/* El latido va sólo en el ::before: si estuviera en el contenedor chocaría
+   con la animación de señal corrupta del peligro EXTREMO. */
+.fx-lowhealth::before {
+  animation: heartbeat 1.6s ease-in-out infinite;
+}
+
+@keyframes heartbeat {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  12% {
+    opacity: 0.55;
+  }
+  24% {
+    opacity: 1;
+  }
+  36% {
+    opacity: 0.75;
+  }
+  48% {
+    opacity: 1;
+  }
+}
+
+/* Infección: fiebre. La imagen se enferma de verde y respira. */
+.fx-infection img {
+  filter: hue-rotate(-18deg) saturate(1.25) contrast(0.92);
+  animation: fever 5s ease-in-out infinite;
+}
+
+@keyframes fever {
+  0%,
+  100% {
+    filter: hue-rotate(-18deg) saturate(1.25) contrast(0.92);
+  }
+  50% {
+    filter: hue-rotate(-32deg) saturate(1.5) contrast(0.85) brightness(1.06);
+  }
+}
+
+/* Peligro EXTREMO: la señal se corrompe, la imagen tiembla. */
+.fx-extreme {
+  animation: signal-break 2.4s steps(1) infinite;
+}
+
+.fx-extreme img {
+  filter: contrast(1.15) saturate(1.1);
+}
+
+@keyframes signal-break {
+  0%,
+  88%,
+  100% {
+    transform: translateX(0);
+    filter: none;
+  }
+  90% {
+    transform: translateX(-2px);
+    filter: drop-shadow(2px 0 rgba(220, 38, 38, 0.7))
+      drop-shadow(-2px 0 rgba(6, 182, 212, 0.6));
+  }
+  92% {
+    transform: translateX(2px);
+  }
+  94% {
+    transform: translateX(-1px);
+    filter: drop-shadow(1px 0 rgba(220, 38, 38, 0.5));
+  }
+}
+
+/* Los avisos mecánicos entran después del texto, no aparecen de golpe. */
+.notice-row > * {
+  animation: notice-in 0.35s ease-out both;
+}
+
+.notice-row > *:nth-child(2) {
+  animation-delay: 0.07s;
+}
+.notice-row > *:nth-child(3) {
+  animation-delay: 0.14s;
+}
+.notice-row > *:nth-child(n + 4) {
+  animation-delay: 0.21s;
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Respeta a quien pidió menos movimiento: el juego ya es bastante hostil. */
+@media (prefers-reduced-motion: reduce) {
+  .fx-lowhealth::before,
+  .fx-extreme,
+  .fx-infection img,
+  .tv-static-live,
+  .title-flicker,
+  .notice-row > * {
+    animation: none;
+  }
+}
+
+/* Título con leve aberración cromática, look de señal corrupta. */
+.glitch-text {
+  text-shadow:
+    0 0 14px rgba(16, 185, 129, 0.55),
+    -1.5px 0 rgba(220, 38, 38, 0.65),
+    1.5px 0 rgba(6, 182, 212, 0.5);
+}
