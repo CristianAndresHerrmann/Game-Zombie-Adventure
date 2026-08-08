@@ -1,37 +1,88 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Zombie Adventure — Survival Game
 
-## Getting Started
+Juego de aventura conversacional de supervivencia zombie con estética pixel art, narrado por IA. Cada turno el modelo escribe la escena, genera su ilustración y resuelve las consecuencias de la decisión tomada.
 
-First, run the development server:
+El objetivo es encontrar y eliminar al **Infectado 0**. No hay guardado: si la salud llega a 0%, la partida termina.
+
+- **Framework:** Next.js 16 (App Router) + React 19 + TypeScript
+- **Estilos:** Tailwind CSS v4
+- **IA:** Google Gemini vía `@google/genai`
+
+## Puesta en marcha
+
+Requiere Node 20 o superior.
+
+Instalá las dependencias:
+
+```bash
+npm install
+```
+
+Copiá el archivo de ejemplo de variables de entorno:
+
+```bash
+cp .env.example .env.local
+```
+
+Y completá la única variable que hace falta:
+
+```
+GEMINI_API_KEY=tu_clave
+```
+
+La clave se genera en [Google AI Studio](https://aistudio.google.com/apikey), y necesita facturación activada para que funcionen las imágenes (ver [Costos](#costos)).
+
+Levantá el servidor de desarrollo:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Abrí [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Script | Qué hace |
+|---|---|
+| `npm run dev` | Servidor de desarrollo |
+| `npm run build` | Build de producción |
+| `npm start` | Sirve el build |
+| `npm run lint` | ESLint |
+| `npx tsc --noEmit` | Chequeo de tipos |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Cómo se juega
 
-## Learn More
+- **Salud:** arranca en 100%. Cada decisión puede costar vida; en 0% termina la partida.
+- **Inventario:** hasta 3 objetos, que determinan qué opciones aparecen. Con la mochila llena, tomar algo nuevo obliga a soltar otra cosa.
+- **Alteraciones:** sangrado, infección, fractura y agotamiento. Drenan vida cada turno y condicionan la narrativa.
+- **Peligro:** cuatro niveles (SEGURO, MEDIO, ALTO, EXTREMO) que tiñen la interfaz y definen cuánto puede salir mal un turno.
+- **Decisiones:** 2 a 4 botones por turno, más 3 improvisaciones de texto libre por partida.
+- **Objetivo:** tres fases (rastro de pistas, persecución y confrontación). Ganar requiere llegar al final con un arma.
 
-To learn more about Next.js, take a look at the following resources:
+El juego incluye un panel **Cómo jugar** en el header con las reglas explicadas para el jugador.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Estructura
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+app/
+  page.tsx            interfaz y estado de la partida
+  api/chat/route.ts   llamadas al modelo y stream de la escena
+  globals.css         ambientación y efectos visuales
+components/           HUD, opciones, escena, pantalla final, reglas
+lib/
+  types.ts            tipos del dominio
+  prompts.ts          prompts de narración e imagen
+  game/engine.ts      constantes de balance y reglas del juego
+```
 
-## Deploy on Vercel
+Para ajustar la dificultad —topes de daño, tamaño del inventario, cantidad de pistas, improvisaciones disponibles— alcanza con tocar las constantes al inicio de `lib/game/engine.ts`. Los modelos usados están al inicio de `app/api/chat/route.ts`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Costos
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-"# Game-Zombie-Adventure" 
+El modelo de texto entra en el free tier de Google AI. **Ningún modelo de imagen lo tiene**: se genera una imagen por turno a unos **USD 0,034** cada una, así que una partida de 20 turnos ronda los USD 0,70.
+
+Si la generación de imagen falla, el turno no se rompe: la escena muestra interferencia de TV en lugar de la ilustración.
+
+## A tener en cuenta
+
+- Un turno tarda entre 20 y 30 segundos en completarse.
+- No hay persistencia. Todo el estado vive en memoria del navegador y se pierde al recargar.
+- Las imágenes se mantienen en memoria durante la partida, sin caché: una partida larga acumula varios MB.
