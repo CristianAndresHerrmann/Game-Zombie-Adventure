@@ -1,5 +1,5 @@
-import { RotateCcw, Skull, Trophy } from "lucide-react";
-import { CLUES_TO_ADVANCE } from "@/lib/game/engine";
+import { Download, RotateCcw, Skull, Trophy } from "lucide-react";
+import { BOSS_HEALTH, CLUES_TO_ADVANCE } from "@/lib/game/engine";
 import type { GameState } from "@/lib/types";
 
 const PHASE_LABELS: Record<GameState["phase"], string> = {
@@ -20,11 +20,16 @@ function Stat({ label, value }: { label: string; value: string }) {
 export default function GameOverScreen({
   state,
   onRestart,
+  onDownload,
+  downloading,
 }: {
   state: GameState;
   onRestart: () => void;
+  onDownload: () => void;
+  downloading: boolean;
 }) {
   const won = state.outcome === "victory";
+  const diedFighting = !won && state.phase === "CONFRONTACION";
 
   return (
     <section
@@ -77,20 +82,41 @@ export default function GameOverScreen({
           }
         />
         <Stat label="Salud final" value={`${state.health}%`} />
+        {diedFighting ? (
+          <Stat
+            label="Vida que le quedaba al Infectado 0"
+            value={`${state.bossHealth}/${BOSS_HEALTH}`}
+          />
+        ) : null}
       </dl>
 
-      <button
-        type="button"
-        onClick={onRestart}
-        className={`flex items-center gap-3 rounded-lg border px-6 py-3 font-heading text-xs transition ${
-          won
-            ? "border-emerald-500 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
-            : "border-red-600 bg-red-600/10 text-red-300 hover:bg-red-600/20"
-        }`}
-      >
-        <RotateCcw className="h-4 w-4" />
-        Nueva Partida
-      </button>
+      <div className="flex w-full flex-col items-center gap-3">
+        <button
+          type="button"
+          onClick={onDownload}
+          disabled={downloading}
+          className="flex w-full max-w-xs items-center justify-center gap-3 rounded-lg border border-slate-500 bg-slate-100/5 px-6 py-3 font-heading text-xs text-slate-200 transition hover:bg-slate-100/10 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Download className="h-4 w-4" />
+          {downloading ? "Guardando…" : "Descargar la historia"}
+        </button>
+        <p className="text-xs text-slate-500">
+          Un archivo HTML con las ilustraciones adentro. Se abre sin conexión.
+        </p>
+
+        <button
+          type="button"
+          onClick={onRestart}
+          className={`mt-2 flex items-center gap-3 rounded-lg border px-6 py-3 font-heading text-xs transition ${
+            won
+              ? "border-emerald-500 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+              : "border-red-600 bg-red-600/10 text-red-300 hover:bg-red-600/20"
+          }`}
+        >
+          <RotateCcw className="h-4 w-4" />
+          Nueva Partida
+        </button>
+      </div>
     </section>
   );
 }

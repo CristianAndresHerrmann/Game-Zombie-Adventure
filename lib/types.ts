@@ -35,12 +35,19 @@ export type GameState = {
   danger: DangerLevel;
   phase: ObjectivePhase;
   clues: number; // 0..CLUES_TO_ADVANCE, sólo cuenta durante RASTRO
+  // Turno en el que se aceptó la última pista, para el cooldown de A5.
+  lastClueTurn: number;
+  // Vida del Infectado 0, sólo relevante durante CONFRONTACION.
+  bossHealth: number;
   // Turnos que lleva activa la INFECCION: el daño por turno escala con esto.
   infectionAge: number;
   instinct: number; // improvisaciones libres restantes
   turn: number;
   outcome: RunOutcome;
   deathCause: string | null;
+  // Resumen de ~60 palabras que el modelo reescribe cada turno, para acotar
+  // el historial que viaja en el prompt.
+  storySummary: string;
 };
 
 export type Choice = {
@@ -83,6 +90,7 @@ export type ChatRequest = {
 export type TurnOutput = {
   storyText: string;
   imagePrompt: string;
+  storySummary: string;
   healthDelta: number;
   itemsGained: Item[];
   itemsLost: string[];
@@ -92,7 +100,10 @@ export type TurnOutput = {
   clueFound: boolean;
   phaseAdvance: boolean;
   fatal: boolean;
-  victory: boolean;
+  // Daño narrado contra el Infectado 0. Sólo importa en CONFRONTACION; el
+  // motor lo acota según el inventario, la victoria no es una decisión del
+  // modelo (ver A3 en el plan de dificultad).
+  bossDamage: number;
   deathCause: string | null;
   choices: { label: string; usesItem: string | null }[];
 };

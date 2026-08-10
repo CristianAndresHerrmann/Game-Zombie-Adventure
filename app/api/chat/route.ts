@@ -1,6 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 import { GAME_PROMPTS } from "@/lib/prompts";
 import {
+  BOSS_HEALTH,
+  HISTORY_WINDOW,
   applyStatusTick,
   createInitialState,
   parseTurnOutput,
@@ -37,20 +39,38 @@ const SENTENCE_PAUSE_MS = 180;
 const PARAGRAPH_PAUSE_MS = 380;
 const SENTENCE_ENDINGS = ".!?…";
 
+// Red de seguridad barata: si la imagen se cuelga, el turno sigue sin ella
+// (interferencia de TV) en vez de morir a los 60s con la imagen ya pagada.
+const IMAGE_TIMEOUT_MS = 20_000;
+
+// Captura el primer imagePrompt ya cerrado dentro del JSON a medio llegar,
+// respetando los escapes: es lo que permite lanzar la imagen sin esperar el
+// resto de la respuesta.
+const IMAGE_PROMPT_RE = /"imagePrompt"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+
 // Narración y mecánicas viajan en un solo JSON. Los campos opcionales usan
 // string vacío en vez de null: los tipos nullable son la parte más frágil del
 // structured output y acá no aportan nada.
+// El orden de las propiedades importa: el modelo las emite en este orden y la
+// imagen se dispara en cuanto imagePrompt está cerrado, sin esperar el resto
+// de la respuesta. Por eso imagePrompt va primero y choices (lo más largo) al
+// final.
 const TURN_SCHEMA = {
   type: "object",
   properties: {
-    storyText: {
-      type: "string",
-      description: "La narración de la escena. Máximo 2 párrafos cortos.",
-    },
     imagePrompt: {
       type: "string",
       description:
         "Descripción en inglés de la escena para la ilustración pixel art. Máximo 40 palabras.",
+    },
+    storyText: {
+      type: "string",
+      description: "La narración de la escena. Máximo 2 párrafos cortos.",
+    },
+    storySummary: {
+      type: "string",
+      description:
+        "Resumen de ~60 palabras de la partida completa hasta este turno, incluido.",
     },
     healthDelta: {
       type: "integer",
@@ -100,9 +120,10 @@ const TURN_SCHEMA = {
       type: "boolean",
       description: "true sólo si la acción mata al jugador de inmediato.",
     },
-    victory: {
-      type: "boolean",
-      description: "true sólo si el jugador eliminó al Infectado 0 con un arma u objeto clave.",
+    bossDamage: {
+      type: "integer",
+      description:
+        "Daño que el jugador le hace al Infectado 0 este turno. 0 fuera de CONFRONTACION o si el golpe falló.",
     },
     deathCause: {
       type: "string",
@@ -128,8 +149,9 @@ const TURN_SCHEMA = {
     },
   },
   required: [
-    "storyText",
     "imagePrompt",
+    "storyText",
+    "storySummary",
     "healthDelta",
     "itemsGained",
     "itemsLost",
@@ -139,7 +161,7 @@ const TURN_SCHEMA = {
     "clueFound",
     "phaseAdvance",
     "fatal",
-    "victory",
+    "bossDamage",
     "deathCause",
     "choices",
   ],
@@ -149,8 +171,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Sólo los últimos turnos viajan textualmente; de lo anterior se encarga el
+// storySummary que el modelo mantiene. Sin esto el prompt crece sin techo.
 function buildHistoryText(history: HistoryTurn[]): string {
   return history
+    .slice(-HISTORY_WINDOW * 2)
     .map(
       (turn) =>
         `${turn.role === "user" ? "Jugador" : "Narrador"}: ${turn.text}`
@@ -177,6 +202,12 @@ function sanitizeState(raw: unknown): GameState {
     danger: DANGER_LEVELS.includes(data.danger as GameState["danger"])
       ? (data.danger as GameState["danger"])
       : base.danger,
+    bossHealth:
+      typeof data.bossHealth === "number" && Number.isFinite(data.bossHealth)
+        ? Math.min(BOSS_HEALTH, Math.max(0, Math.round(data.bossHealth)))
+        : base.bossHealth,
+    storySummary:
+      typeof data.storySummary === "string" ? data.storySummary : "",
   };
 }
 
@@ -244,27 +275,103 @@ export async function POST(request: Request): Promise<Response> {
         controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
       }
 
-      let turn: ReturnType<typeof parseTurnOutput>;
-      try {
-        const textInteraction = await ai.interactions.create({
+      // La imagen se lanza apenas el modelo cierra imagePrompt, sin esperar
+      // el resto de la respuesta: es lo que saca la generación de imagen del
+      // camino crítico del turno.
+      let imagePromise: Promise<string | null> | null = null;
+
+      // El clima de la ilustración sale del estado con el que arranca el
+      // turno, no del resuelto: cuando la imagen se dispara todavía no se
+      // resolvió nada. Es el precio de sacarla del camino crítico.
+      function startImage(imagePrompt: string) {
+        const request = ai.interactions
+          .create({
+            model: IMAGE_MODEL,
+            input: GAME_PROMPTS.GENERATE_IMAGE(imagePrompt, tickedState),
+            response_format: {
+              type: "image",
+              aspect_ratio: "16:9",
+              image_size: "512",
+            },
+          })
+          .then((interaction) => {
+            const image = interaction.output_image;
+            if (!image?.data) {
+              console.error("[api/chat] El modelo de imagen no devolvió datos.");
+              return null;
+            }
+            return `data:${image.mime_type ?? "image/png"};base64,${image.data}`;
+          })
+          .catch((err) => {
+            console.error("[api/chat] Fallo al generar la imagen:", err);
+            return null;
+          });
+
+        const timeout = new Promise<string | null>((resolve) =>
+          setTimeout(() => resolve(null), IMAGE_TIMEOUT_MS)
+        );
+        imagePromise = Promise.race([request, timeout]);
+      }
+
+      /** Consume el stream acumulando el JSON y disparando la imagen al vuelo. */
+      async function streamTurnJson(): Promise<string> {
+        const events = await ai.interactions.create({
           model: TEXT_MODEL,
           input: prompt,
+          stream: true,
+          // Con el nivel por defecto el modelo se toma 8-10s antes del primer
+          // token y la paralelización con la imagen pierde casi todo su
+          // sentido: imagePrompt recién aparecería cerca del final. Medido,
+          // esto solo saca ~8s del turno.
+          generation_config: { thinking_level: "minimal" },
           response_format: {
             type: "text",
             mime_type: "application/json",
             schema: TURN_SCHEMA as unknown as Record<string, unknown>,
           },
         });
-        const raw = textInteraction.output_text?.trim() ?? "";
-        if (!raw) {
-          throw new Error("Respuesta de texto vacía.");
+
+        let raw = "";
+        for await (const event of events) {
+          if (event.event_type !== "step.delta") continue;
+          const delta = event.delta;
+          if (delta.type !== "text") continue;
+          raw += delta.text;
+
+          if (!imagePromise) {
+            const match = IMAGE_PROMPT_RE.exec(raw);
+            if (match) {
+              // El campo viene escapado como JSON: se desescapa parseándolo.
+              try {
+                const imagePrompt = JSON.parse(`"${match[1]}"`) as string;
+                if (imagePrompt.trim()) startImage(imagePrompt.trim());
+              } catch {
+                console.error("[api/chat] imagePrompt ilegible en el stream.");
+              }
+            }
+          }
         }
-        turn = parseTurnOutput(JSON.parse(raw));
-        if (!turn) {
-          throw new Error("La respuesta no tiene narración utilizable.");
+        return raw.trim();
+      }
+
+      let turn: ReturnType<typeof parseTurnOutput> = null;
+      // Un reintento: un stream cortado o un JSON truncado es lo bastante
+      // común como para no quemarle el turno al jugador por eso.
+      for (let attempt = 0; attempt < 2 && !turn; attempt++) {
+        try {
+          const raw = await streamTurnJson();
+          if (!raw) throw new Error("Respuesta de texto vacía.");
+          turn = parseTurnOutput(JSON.parse(raw));
+          if (!turn) throw new Error("La respuesta no tiene narración utilizable.");
+        } catch (err) {
+          console.error(
+            `[api/chat] Fallo al generar la narrativa (intento ${attempt + 1}):`,
+            err
+          );
         }
-      } catch (err) {
-        console.error("[api/chat] Fallo al generar la narrativa:", err);
+      }
+
+      if (!turn) {
         send({ type: "error" });
         controller.close();
         return;
@@ -272,50 +379,26 @@ export async function POST(request: Request): Promise<Response> {
 
       // Menos de dos opciones con el jugador vivo deja la partida trabada:
       // mejor cortar acá y que el cliente ofrezca reintentar.
-      const willEnd = turn.fatal || turn.victory;
-      if (!willEnd && turn.choices.length < 2) {
+      const resolved = resolveTurn(tickedState, turn, actionKind);
+      const nextState = resolved.state;
+      const notices = [...tickNotices, ...resolved.notices];
+
+      if (nextState.outcome === "playing" && turn.choices.length < 2) {
         console.error("[api/chat] El modelo devolvió menos de dos opciones.");
         send({ type: "error" });
         controller.close();
         return;
       }
 
-      const resolved = resolveTurn(tickedState, turn);
-      const nextState = resolved.state;
-      const notices = [...tickNotices, ...resolved.notices];
-
-      // La imagen nunca debe romper el turno: si falla (sin facturación
-      // activada, cuota agotada, timeout, etc.) devolvemos imageUrl: null
-      // y el frontend muestra una interferencia visual en su lugar.
-      let imageUrl: string | null = null;
-      if (turn.imagePrompt) {
-        try {
-          const imageInteraction = await ai.interactions.create({
-            model: IMAGE_MODEL,
-            input: GAME_PROMPTS.GENERATE_IMAGE(turn.imagePrompt, nextState),
-            response_format: {
-              type: "image",
-              aspect_ratio: "16:9",
-              image_size: "1K",
-            },
-          });
-          const image = imageInteraction.output_image;
-          if (image?.data) {
-            const mimeType = image.mime_type ?? "image/png";
-            imageUrl = `data:${mimeType};base64,${image.data}`;
-          } else {
-            console.error("[api/chat] El modelo de imagen no devolvió datos.");
-          }
-        } catch (err) {
-          console.error("[api/chat] Fallo al generar la imagen:", err);
-        }
-      } else {
+      if (!imagePromise) {
         console.error("[api/chat] El modelo omitió el imagePrompt.");
       }
 
       // La imagen va primero: la escena aparece con la ilustración lista y
       // el texto se revela después con efecto de escritura, todo de un
-      // tirón y sin esperas intermedias visibles.
+      // tirón y sin esperas intermedias visibles. A esta altura suele estar
+      // resuelta hace rato, porque arrancó antes de que terminara el texto.
+      const imageUrl = imagePromise ? await imagePromise : null;
       send({ type: "image", imageUrl });
 
       for (let i = 0; i < turn.storyText.length; i++) {

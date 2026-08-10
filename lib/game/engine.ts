@@ -14,6 +14,7 @@ export const MAX_INVENTORY = 3;
 export const CLUES_TO_ADVANCE = 3;
 export const STARTING_INSTINCT = 3;
 export const IMPROVISE_MAX_CHARS = 70;
+export const HISTORY_WINDOW = 6;
 
 // La IA propone el daño narrativamente coherente; acá se decide cuánto puede
 // doler de verdad. Sin este techo, un modelo generoso te mata en el turno dos.
@@ -31,7 +32,20 @@ const EXHAUSTION_DAMAGE = 2;
 const INFECTION_BASE_DAMAGE = 3;
 const INFECTION_RAMP_EVERY = 3;
 
-const VICTORY_ITEM_KINDS = new Set(["arma", "clave"]);
+// Vida del jefe y su contraataque garantizado (ver A1/A2 en el plan de
+// dificultad): con estos números el piso de la confrontación son 5 turnos,
+// incluso con los 3 instintos guardados y daño máximo.
+export const BOSS_HEALTH = 120;
+export const BOSS_ATTACK = 12;
+const BOSS_DAMAGE_CAP_CLAVE = 18;
+const BOSS_DAMAGE_CAP_ARMA = 8;
+const BOSS_DAMAGE_CAP_NONE = 3;
+const BOSS_DAMAGE_IMPROVISE_BONUS = 12;
+
+// Cooldown de pistas (A5): sin esto el modelo regala una casi por turno.
+export const CLUE_COOLDOWN = 2;
+
+const VICTORY_ITEM_KINDS = new Set(["clave"]);
 
 export function createInitialState(): GameState {
   return {
@@ -41,12 +55,32 @@ export function createInitialState(): GameState {
     danger: "SEGURO",
     phase: "RASTRO",
     clues: 0,
+    // Arranca en 0, no en -CLUE_COOLDOWN: la escena de apertura presenta el
+    // mundo, no reparte pistas. Con eso el piso de RASTRO son 7 turnos.
+    lastClueTurn: 0,
+    bossHealth: BOSS_HEALTH,
     infectionAge: 0,
     instinct: STARTING_INSTINCT,
     turn: 0,
     outcome: "playing",
     deathCause: null,
+    storySummary: "",
   };
+}
+
+/** El mejor objeto para pelear cuerpo a cuerpo con el Infectado 0. */
+function bossDamageCap(
+  inventory: Item[],
+  actionKind: "choice" | "improvise"
+): number {
+  const hasClave = inventory.some((item) => item.kind === "clave");
+  const hasArma = inventory.some((item) => item.kind === "arma");
+  const base = hasClave
+    ? BOSS_DAMAGE_CAP_CLAVE
+    : hasArma
+      ? BOSS_DAMAGE_CAP_ARMA
+      : BOSS_DAMAGE_CAP_NONE;
+  return actionKind === "improvise" ? base + BOSS_DAMAGE_IMPROVISE_BONUS : base;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -73,7 +107,11 @@ export function applyStatusTick(state: GameState): {
   state: GameState;
   notices: string[];
 } {
-  if (state.outcome !== "playing" || state.statuses.length === 0) {
+  const inConfrontation = state.phase === "CONFRONTACION";
+  if (
+    state.outcome !== "playing" ||
+    (state.statuses.length === 0 && !inConfrontation)
+  ) {
     return { state, notices: [] };
   }
 
@@ -103,6 +141,13 @@ export function applyStatusTick(state: GameState): {
 
   // FRACTURA no drena vida: sólo cierra opciones en el prompt.
 
+  // El Infectado 0 contraataca todo turno de confrontación, narrado o no
+  // (A2): sin este piso el jugador podía llegar herido y ganar igual.
+  if (inConfrontation) {
+    damage += BOSS_ATTACK;
+    notices.push(`EL INFECTADO 0 CONTRAATACA −${BOSS_ATTACK} ♥`);
+  }
+
   const health = clamp(state.health - damage, 0, MAX_HEALTH);
   const next: GameState = { ...state, health, infectionAge };
 
@@ -110,7 +155,9 @@ export function applyStatusTick(state: GameState): {
     next.outcome = "dead";
     next.deathCause = state.statuses.includes("INFECCION")
       ? "La infección terminó el trabajo."
-      : "Te desangraste.";
+      : inConfrontation
+        ? "El Infectado 0 te alcanzó."
+        : "Te desangraste.";
   }
 
   return { state: next, notices };
@@ -180,6 +227,8 @@ export function parseTurnOutput(raw: unknown): TurnOutput | null {
     storyText,
     imagePrompt:
       typeof data.imagePrompt === "string" ? data.imagePrompt.trim() : "",
+    storySummary:
+      typeof data.storySummary === "string" ? data.storySummary.trim() : "",
     healthDelta:
       typeof data.healthDelta === "number" && Number.isFinite(data.healthDelta)
         ? Math.round(data.healthDelta)
@@ -192,7 +241,10 @@ export function parseTurnOutput(raw: unknown): TurnOutput | null {
     clueFound: data.clueFound === true,
     phaseAdvance: data.phaseAdvance === true,
     fatal: data.fatal === true,
-    victory: data.victory === true,
+    bossDamage:
+      typeof data.bossDamage === "number" && Number.isFinite(data.bossDamage)
+        ? Math.max(0, Math.round(data.bossDamage))
+        : 0,
     deathCause:
       typeof data.deathCause === "string" && data.deathCause.trim()
         ? data.deathCause.trim()
@@ -204,13 +256,16 @@ export function parseTurnOutput(raw: unknown): TurnOutput | null {
 function advancePhase(
   phase: ObjectivePhase,
   clues: number,
-  phaseAdvance: boolean
+  phaseAdvance: boolean,
+  hasKeyItem: boolean
 ): ObjectivePhase {
   if (phase === "RASTRO") {
     return clues >= CLUES_TO_ADVANCE ? "PERSECUCION" : "RASTRO";
   }
   if (phase === "PERSECUCION") {
-    return phaseAdvance ? "CONFRONTACION" : "PERSECUCION";
+    // Sin objeto clave no hay confrontación posible (A4): así nunca te cruzás
+    // con el Infectado 0 sin con qué matarlo.
+    return phaseAdvance && hasKeyItem ? "CONFRONTACION" : "PERSECUCION";
   }
   return "CONFRONTACION";
 }
@@ -218,7 +273,8 @@ function advancePhase(
 /** Aplica la propuesta del modelo acotada por las reglas del juego. */
 export function resolveTurn(
   state: GameState,
-  output: TurnOutput
+  output: TurnOutput,
+  actionKind: "choice" | "improvise"
 ): { state: GameState; healthDelta: number; notices: string[] } {
   const notices: string[] = [];
 
@@ -295,13 +351,27 @@ export function resolveTurn(
   const statuses = STATUS_EFFECTS.filter((status) => statusSet.has(status));
   const infectionAge = statuses.includes("INFECCION") ? state.infectionAge : 0;
 
+  // Las pistas cuestan (A5): cooldown entre pistas y nada gratis en SEGURO,
+  // donde no hay riesgo que las justifique.
   let clues = state.clues;
-  if (state.phase === "RASTRO" && output.clueFound) {
+  let lastClueTurn = state.lastClueTurn;
+  const clueAllowed =
+    state.phase === "RASTRO" &&
+    output.clueFound &&
+    danger !== "SEGURO" &&
+    state.turn - lastClueTurn >= CLUE_COOLDOWN;
+  if (clueAllowed) {
     clues = Math.min(clues + 1, CLUES_TO_ADVANCE);
+    lastClueTurn = state.turn;
     notices.push(`🔍 Pista ${clues}/${CLUES_TO_ADVANCE}`);
   }
 
-  const phase = advancePhase(state.phase, clues, output.phaseAdvance);
+  const phase = advancePhase(
+    state.phase,
+    clues,
+    output.phaseAdvance,
+    hasVictoryItem(inventory)
+  );
   if (phase !== state.phase) {
     notices.push(`▸ FASE: ${phase}`);
   }
@@ -310,18 +380,28 @@ export function resolveTurn(
     danger = "EXTREMO";
   }
 
+  // El daño al jefe sólo se resuelve una vez que el enfrentamiento ya estaba
+  // en curso al empezar el turno: llegar y trabarse en combate son cosas
+  // distintas (A1).
+  let bossHealth = state.bossHealth;
+  if (state.phase === "CONFRONTACION") {
+    const cap = bossDamageCap(inventory, actionKind);
+    const bossDamage = clamp(output.bossDamage, 0, cap);
+    bossHealth = clamp(bossHealth - bossDamage, 0, BOSS_HEALTH);
+    if (bossDamage > 0) {
+      notices.push(`☠ INFECTADO 0 −${bossDamage}`);
+    }
+  }
+
   let outcome = state.outcome;
   let deathCause = state.deathCause;
 
   if (health <= 0) {
     outcome = "dead";
     deathCause = output.deathCause ?? "Sucumbiste a tus heridas.";
-  } else if (
-    output.victory &&
-    phase === "CONFRONTACION" &&
-    hasVictoryItem(inventory)
-  ) {
-    // Sin arma la victoria se ignora y el enfrentamiento continúa.
+  } else if (state.phase === "CONFRONTACION" && bossHealth <= 0) {
+    // La victoria ya no es una decisión del modelo: se gana cuando el jefe
+    // se queda sin vida (A3).
     outcome = "victory";
   }
 
@@ -333,11 +413,14 @@ export function resolveTurn(
       danger,
       phase,
       clues,
+      lastClueTurn,
+      bossHealth,
       infectionAge,
       instinct: state.instinct,
       turn: state.turn + 1,
       outcome,
       deathCause,
+      storySummary: output.storySummary || state.storySummary,
     },
     healthDelta,
     notices,

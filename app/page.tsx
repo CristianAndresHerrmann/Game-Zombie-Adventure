@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Biohazard,
+  Download,
   HelpCircle,
   RadioOff,
   RotateCcw,
@@ -13,6 +14,7 @@ import GameOverScreen from "@/components/GameOverScreen";
 import HowToPlay from "@/components/HowToPlay";
 import SceneCard from "@/components/SceneCard";
 import StatusBar from "@/components/StatusBar";
+import { downloadStory } from "@/lib/export";
 import { createInitialState, spendInstinct } from "@/lib/game/engine";
 import type { GameState, HistoryTurn, Scene, StreamEvent } from "@/lib/types";
 
@@ -35,6 +37,22 @@ function makeSceneId(): string {
     : `scene-${Date.now()}-${Math.random()}`;
 }
 
+/**
+ * El servidor manda la imagen como data URL, pero guardar ese string en el
+ * estado de React cuesta cientos de KB por escena que se recrean en cada
+ * carácter del typewriter. Un object URL ocupa ~50 caracteres.
+ */
+function toObjectUrl(dataUrl: string): string {
+  const [header, base64] = dataUrl.split(",");
+  const mime = header.match(/data:([^;]+)/)?.[1] ?? "image/png";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return URL.createObjectURL(new Blob([bytes], { type: mime }));
+}
+
 function scrollToBottom() {
   // Salto instantáneo: cada carácter mueve el scroll unos pocos píxeles,
   // así que se ve fluido sin que un "smooth" pise al siguiente.
@@ -51,11 +69,19 @@ export default function Home() {
   const [signalLost, setSignalLost] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
 
+  const [downloading, setDownloading] = useState(false);
+
   const started = scenes.length > 0;
   const gameOver = gameState.outcome !== "playing";
   const lastScene = scenes[scenes.length - 1];
+  // Se puede guardar a mitad de partida, pero no antes de tener una escena
+  // completa: si no, el archivo saldría vacío.
+  const canDownload = scenes.some((s) => s.status === "complete");
 
   const actionBarRef = useRef<HTMLDivElement | null>(null);
+  // Los object URLs viven hasta que se revocan a mano: sin este registro los
+  // blobs quedan retenidos toda la sesión.
+  const objectUrlsRef = useRef<Map<string, string>>(new Map());
   // Mientras el jugador esté al pie del feed, el scroll sigue a la
   // narración. Si scrollea hacia arriba para releer una escena anterior,
   // dejamos de perseguirlo hasta que vuelva abajo o mande otra acción.
@@ -104,6 +130,25 @@ export default function Home() {
   useEffect(() => {
     if (followBottomRef.current) scrollToBottom();
   }, [scenes, loading, gameOver]);
+
+  useEffect(() => {
+    const urls = objectUrlsRef.current;
+    return () => {
+      for (const url of urls.values()) URL.revokeObjectURL(url);
+      urls.clear();
+    };
+  }, []);
+
+  // No hay guardado: una recarga borra la partida, así que al menos avisamos
+  // mientras siga en curso.
+  useEffect(() => {
+    if (!started || gameOver) return;
+    function warn(event: BeforeUnloadEvent) {
+      event.preventDefault();
+    }
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [started, gameOver]);
 
   // La barra inferior crece de golpe al terminar el turno: el spinner pasa a
   // ser tres o cuatro botones y taparía las últimas líneas del relato.
@@ -193,9 +238,14 @@ export default function Home() {
             case "text":
               patchScene((s) => ({ storyText: s.storyText + event.delta }));
               break;
-            case "image":
-              patchScene({ imageUrl: event.imageUrl });
+            case "image": {
+              const objectUrl = event.imageUrl
+                ? toObjectUrl(event.imageUrl)
+                : null;
+              if (objectUrl) objectUrlsRef.current.set(sceneId, objectUrl);
+              patchScene({ imageUrl: objectUrl });
               break;
+            }
             case "state":
               setGameState(event.state);
               patchScene({ notices: event.notices, stateAfter: event.state });
@@ -212,7 +262,9 @@ export default function Home() {
         }
       }
     } catch {
-      // Rollback del turno completo, incluido el punto de INSTINTO.
+      // Rollback del turno completo, incluido el punto de INSTINTO y la
+      // imagen que hubiera llegado antes del fallo.
+      revokeSceneImage(sceneId);
       setScenes((prev) => prev.filter((s) => s.id !== sceneId));
       setGameState(stateBefore);
       setSignalLost(true);
@@ -221,8 +273,25 @@ export default function Home() {
     }
   }
 
+  function revokeSceneImage(sceneId: string) {
+    const url = objectUrlsRef.current.get(sceneId);
+    if (url) {
+      URL.revokeObjectURL(url);
+      objectUrlsRef.current.delete(sceneId);
+    }
+  }
+
   function handleStart() {
     void runTurn(null, "choice");
+  }
+
+  async function handleDownload() {
+    setDownloading(true);
+    try {
+      await downloadStory(scenes, gameState);
+    } finally {
+      setDownloading(false);
+    }
   }
 
   function handleReset() {
@@ -232,6 +301,10 @@ export default function Home() {
       );
       if (!confirmed) return;
     }
+    for (const url of objectUrlsRef.current.values()) {
+      URL.revokeObjectURL(url);
+    }
+    objectUrlsRef.current.clear();
     setScenes([]);
     setGameState(createInitialState());
     setSignalLost(false);
@@ -250,6 +323,21 @@ export default function Home() {
             SURVIVAL GAME
           </h1>
           <div className="flex shrink-0 items-center gap-2">
+            {canDownload ? (
+              <button
+                type="button"
+                onClick={() => void handleDownload()}
+                disabled={downloading}
+                aria-label="Descargar la historia"
+                title="Descargar la historia como archivo HTML"
+                className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-400 transition hover:border-emerald-500/50 hover:text-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Download className="h-4 w-4" />
+                <span className="hidden sm:inline">
+                  {downloading ? "Guardando…" : "Descargar"}
+                </span>
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => setHelpOpen(true)}
@@ -314,7 +402,7 @@ export default function Home() {
                 className="flex items-center gap-2 text-xs text-slate-500 underline-offset-4 transition hover:text-emerald-400 hover:underline"
               >
                 <HelpCircle className="h-3.5 w-3.5" />
-                Leé las reglas antes de salir
+                Leé las reglas antes de jugar
               </button>
             </div>
           </div>
@@ -331,7 +419,12 @@ export default function Home() {
         )}
 
         {gameOver ? (
-          <GameOverScreen state={gameState} onRestart={handleReset} />
+          <GameOverScreen
+            state={gameState}
+            onRestart={handleReset}
+            onDownload={() => void handleDownload()}
+            downloading={downloading}
+          />
         ) : null}
 
         {signalLost ? (

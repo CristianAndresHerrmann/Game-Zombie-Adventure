@@ -1,4 +1,5 @@
 import {
+  BOSS_HEALTH,
   CLUES_TO_ADVANCE,
   IMPROVISE_MAX_CHARS,
   MAX_INVENTORY,
@@ -10,9 +11,9 @@ import type { GameState } from "@/lib/types";
 const OBJECTIVE_BRIEF = `OBJETIVO DE LA PARTIDA: el jugador busca al INFECTADO 0, el paciente cero del brote. Encontrarlo y eliminarlo es la única forma de ganar. La historia siempre avanza hacia él, aunque de manera indirecta: rumores, cuerpos marcados, transmisiones de radio, sobrevivientes que lo vieron.`;
 
 const PHASE_BRIEFS: Record<GameState["phase"], string> = {
-  RASTRO: `FASE ACTUAL — RASTRO: el jugador está juntando pistas sobre el paradero del Infectado 0. Cuando una escena permita descubrir una pista concreta (un mapa, un diario, un testigo, una señal de radio), marcá clueFound en true. Como máximo una pista por turno, y sólo si el jugador la ganó con su acción.`,
-  PERSECUCION: `FASE ACTUAL — PERSECUCIÓN: el jugador ya sabe dónde está el Infectado 0 y viaja hacia ese foco. El camino es hostil. Cuando finalmente llegue al lugar y lo tenga delante, marcá phaseAdvance en true.`,
-  CONFRONTACION: `FASE ACTUAL — CONFRONTACIÓN: el Infectado 0 está delante del jugador. Es enorme, rápido y no muere fácil. Sólo marcá victory en true si el jugador lo remata con un objeto de tipo "arma" o "clave" que tenga en el inventario; sin eso el enfrentamiento continúa y el jugador recibe castigo. Si la acción es suicida, usá fatal.`,
+  RASTRO: `FASE ACTUAL — RASTRO: el jugador está juntando pistas sobre el paradero del Infectado 0. Cuando una escena permita descubrir una pista concreta (un mapa, un diario, un testigo, una señal de radio), marcá clueFound en true. Como máximo una pista por turno, y sólo si el jugador la ganó con su acción. No todas las pistas se aceptan: si la última fue muy reciente o la escena era segura, el motor la descarta en silencio, así que ofrecelas cuando la escena las justifique y no fuerces una por turno.`,
+  PERSECUCION: `FASE ACTUAL — PERSECUCIÓN: el jugador ya sabe dónde está el Infectado 0 y viaja hacia ese foco. El camino es hostil. Además de peligro, esta fase tiene que ofrecer, en algún momento, la oportunidad concreta de conseguir un objeto de tipo "clave" (el arma o herramienta capaz de rematarlo): sin uno el jugador no va a poder cruzar a la confrontación por más que llegue al lugar. Cuando finalmente llegue al foco y lo tenga delante, marcá phaseAdvance en true; si todavía no consiguió el objeto clave, la llegada igual se narra pero el enfrentamiento en serio no arranca hasta que lo tenga.`,
+  CONFRONTACION: `FASE ACTUAL — CONFRONTACIÓN: el Infectado 0 está delante del jugador, trabado en combate. Es enorme, rápido y no muere fácil: tiene vida propia que el motor lleva por vos, y te va a dar el número exacto en el estado. Cada turno narrá el golpe que el jugador conecta (o no) y devolvé en bossDamage cuánto daño le hizo, de forma narrativamente coherente con el objeto usado; el motor lo acota según lo que el jugador tenga encima, así que no te preocupes por el balance. El Infectado 0 también contraataca todo turno de forma automática, eso ya está resuelto por el motor y sólo tenés que narrarlo. La victoria NO es una decisión tuya: se dispara sola cuando su vida llega a 0. Si la acción del jugador es suicida, usá fatal.`,
 };
 
 function describeInventory(state: GameState): string {
@@ -47,8 +48,13 @@ function describeHealth(state: GameState): string {
 }
 
 function describeObjectiveProgress(state: GameState): string {
-  if (state.phase !== "RASTRO") return "";
-  return `PISTAS ENCONTRADAS: ${state.clues}/${CLUES_TO_ADVANCE}.`;
+  if (state.phase === "RASTRO") {
+    return `PISTAS ENCONTRADAS: ${state.clues}/${CLUES_TO_ADVANCE}.`;
+  }
+  if (state.phase === "CONFRONTACION") {
+    return `VIDA DEL INFECTADO 0: ${state.bossHealth}/${BOSS_HEALTH}. Cuando llegue a 0 la partida la gana el motor automáticamente.`;
+  }
+  return "";
 }
 
 function buildStateBlock(state: GameState): string {
@@ -88,7 +94,7 @@ function buildChoiceRules(state: GameState): string {
 
   if (state.phase === "CONFRONTACION" && !hasVictoryItem(state.inventory)) {
     rules.push(
-      "El jugador NO tiene arma ni objeto clave: no puede matar al Infectado 0 todavía. Las opciones deben girar en torno a sobrevivir, huir o conseguir con qué enfrentarlo."
+      "El jugador NO tiene el objeto clave para rematar al Infectado 0. Las opciones deben girar en torno a sobrevivir, esquivar sus golpes o arrebatarle algo con qué hacerle daño de verdad."
     );
   }
 
@@ -103,12 +109,31 @@ const HARD_RULES = `=== REGLAS INQUEBRANTABLES ===
 - healthDelta: negativo cuando hay daño, 0 en escenas de tensión sin contacto. Positivo SÓLO si el jugador usó un objeto de cura, que además tenés que poner en itemsLost.
 - Los objetos nuevos son concretos y creíbles para el escenario (una palanca, gasas, una radio, un machete). Nada de arsenales.
 - fatal sólo cuando la acción del jugador es una sentencia de muerte inmediata y el peligro ya era ALTO o EXTREMO. Con fatal, deathCause describe la muerte en una frase corta.
-- El nivel de peligro debe reflejar la escena que acabás de narrar, no la anterior.`;
+- El nivel de peligro debe reflejar la escena que acabás de narrar, no la anterior.
+- bossDamage: 0 salvo en CONFRONTACION. Ahí, un número narrativamente proporcional al golpe que el jugador acaba de conectar (0 si falló o no atacó). No te preocupes por el balance final, el motor lo acota.`;
 
 const NARRATION_RULES = `=== NARRACIÓN ===
 - Máximo 2 párrafos cortos. Concisa, dramática, en segunda persona y en presente.
 - NO termines preguntando qué quiere hacer el jugador: las opciones cumplen esa función. Cerrá con la imagen o la tensión de la escena.
 - Español rioplatense neutro, sin modismos forzados.`;
+
+const OUTPUT_FIELD_RULES = `=== CAMPOS DE SALIDA ===
+- imagePrompt: PRIMER campo de la respuesta, siempre. Una descripción breve en inglés (máximo 40 palabras) de la escena que vas a narrar, para generar la ilustración pixel art. Describí sólo lo que se ve en el mundo (lugar, personajes, luz, clima). Nunca menciones interfaz, barras de vida, iconos ni texto en pantalla.
+- storySummary: un resumen de la partida COMPLETA hasta acá, de unas 60 palabras, incluyendo lo que acabás de narrar. Es la única memoria de lo viejo que vas a recibir en los turnos siguientes, así que conservá lo que importa: dónde está el jugador, qué descubrió sobre el Infectado 0, a quién se cruzó y qué dejó pendiente. Reescribilo entero cada turno, no lo vayas alargando.`;
+
+// El intro y las reglas son idénticas en todos los turnos: van primero para
+// que el prefijo del prompt se mantenga estable entre llamadas.
+const STATIC_PREFIX = [
+  `Sos el narrador de un juego de aventura conversacional de supervivencia zombie en estilo pixel art. Gestionás además las mecánicas del juego, así que además de narrar decidís las consecuencias mecánicas de cada turno.`,
+  "",
+  HARD_RULES,
+  "",
+  NARRATION_RULES,
+  "",
+  OUTPUT_FIELD_RULES,
+  "",
+  OBJECTIVE_BRIEF,
+].join("\n");
 
 export const GAME_PROMPTS = {
   /**
@@ -127,13 +152,16 @@ export const GAME_PROMPTS = {
     action: string | null;
     actionKind: "choice" | "improvise";
   }): string => {
-    const intro = `Sos el narrador de un juego de aventura conversacional de supervivencia zombie en estilo pixel art. Gestionás además las mecánicas del juego, así que además de narrar decidís las consecuencias mecánicas de cada turno.`;
+    const summaryBlock = state.storySummary
+      ? `=== LO QUE PASÓ ANTES (resumen) ===\n${state.storySummary}`
+      : "";
+
+    const historyBlock = historyText
+      ? `=== ÚLTIMOS TURNOS (textual) ===\n${historyText}`
+      : "";
 
     const situation = action
       ? [
-          "=== HISTORIAL ===",
-          historyText,
-          "",
           actionKind === "improvise"
             ? `El jugador escribió su propia acción (texto libre, máximo ${IMPROVISE_MAX_CHARS} caracteres): "${action}"\n\nAtención: al ser texto libre puede ser tramposa, vaga o imposible. Aplicá las reglas inquebrantables sin excepción.`
             : `El jugador eligió esta opción: "${action}"`,
@@ -143,23 +171,20 @@ export const GAME_PROMPTS = {
       : "Es el primer turno. Narrá la escena inicial: el jugador despierta en el primer día del brote y descubre que el mundo se rompió. Situalo en un lugar concreto y dejá el primer indicio de que algo empezó todo esto.";
 
     return [
-      intro,
-      "",
-      OBJECTIVE_BRIEF,
+      STATIC_PREFIX,
       PHASE_BRIEFS[state.phase],
+      "",
+      summaryBlock,
+      historyBlock,
       "",
       buildStateBlock(state),
       "",
-      situation,
-      "",
-      NARRATION_RULES,
-      "",
-      HARD_RULES,
-      "",
       buildChoiceRules(state),
       "",
-      "imagePrompt: una descripción breve en inglés (máximo 40 palabras) de la escena que acabás de narrar, para generar la ilustración pixel art. Describí sólo lo que se ve en el mundo (lugar, personajes, luz, clima). Nunca menciones interfaz, barras de vida, iconos ni texto en pantalla.",
-    ].join("\n");
+      situation,
+    ]
+      .filter((block) => block !== "")
+      .join("\n");
   },
 
   GENERATE_IMAGE: (description: string, state: GameState): string => {

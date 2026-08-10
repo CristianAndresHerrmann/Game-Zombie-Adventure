@@ -7,11 +7,17 @@ import {
   KeyRound,
   Pill,
   Search,
+  Skull,
   Sparkles,
   Wrench,
   Zap,
 } from "lucide-react";
-import { CLUES_TO_ADVANCE, MAX_INVENTORY, STARTING_INSTINCT } from "@/lib/game/engine";
+import {
+  BOSS_HEALTH,
+  CLUES_TO_ADVANCE,
+  MAX_INVENTORY,
+  STARTING_INSTINCT,
+} from "@/lib/game/engine";
 import { DANGER_LEVELS } from "@/lib/types";
 import type { GameState, ItemKind, StatusEffect } from "@/lib/types";
 
@@ -117,6 +123,30 @@ function InventorySlots({ inventory }: { inventory: GameState["inventory"] }) {
   );
 }
 
+function BossHealthMeter({ bossHealth }: { bossHealth: number }) {
+  const pct = Math.max(0, Math.min(100, (bossHealth / BOSS_HEALTH) * 100));
+  return (
+    <div className="flex w-full items-center gap-2">
+      <Skull className="h-4 w-4 shrink-0 text-red-500" strokeWidth={2} />
+      <span className="shrink-0 font-heading text-[9px] tracking-wide text-red-400">
+        INFECTADO 0
+      </span>
+      <div className="h-2 flex-1 overflow-hidden rounded-full border border-red-800/60 bg-slate-950">
+        <div
+          className="h-full rounded-full bg-red-600 transition-[width] duration-700 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span
+        className="shrink-0 font-heading text-[9px] tabular-nums text-red-400"
+        aria-label={`Vida del Infectado 0: ${bossHealth} de ${BOSS_HEALTH}`}
+      >
+        {bossHealth}/{BOSS_HEALTH}
+      </span>
+    </div>
+  );
+}
+
 function DangerMeter({ danger }: { danger: GameState["danger"] }) {
   const level = DANGER_LEVELS.indexOf(danger);
   return (
@@ -147,6 +177,9 @@ function DangerMeter({ danger }: { danger: GameState["danger"] }) {
 export default function StatusBar({ state }: { state: GameState }) {
   return (
     <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-x-5 gap-y-3 px-4 pb-3">
+      {state.phase === "CONFRONTACION" ? (
+        <BossHealthMeter bossHealth={state.bossHealth} />
+      ) : null}
       <HealthMeter health={state.health} />
       <InventorySlots inventory={state.inventory} />
       <DangerMeter danger={state.danger} />

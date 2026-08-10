@@ -8,12 +8,16 @@ import {
   Check,
   Crosshair,
   Heart,
+  KeyRound,
   PenLine,
   Search,
+  Skull,
   TriangleAlert,
   X,
 } from "lucide-react";
 import {
+  BOSS_ATTACK,
+  BOSS_HEALTH,
   CLUES_TO_ADVANCE,
   IMPROVISE_MAX_CHARS,
   MAX_INVENTORY,
@@ -30,12 +34,17 @@ const RULES: Rule[] = [
   {
     icon: Crosshair,
     title: "El objetivo",
-    body: `Encontrar y eliminar al Infectado 0. Se llega en tres fases: RASTRO (juntar ${CLUES_TO_ADVANCE} pistas sobre su paradero), PERSECUCIÓN (viajar hasta el foco) y CONFRONTACIÓN (enfrentarlo). Sin un arma u objeto clave en la mochila no vas a poder rematarlo, por más cerca que estés.`,
+    body: `Encontrar y eliminar al Infectado 0. Se llega en tres fases: RASTRO (juntar ${CLUES_TO_ADVANCE} pistas sobre su paradero), PERSECUCIÓN (viajar hasta el foco) y CONFRONTACIÓN (enfrentarlo). Sin un objeto de tipo "clave" en la mochila no vas a poder cruzar a la confrontación, por más cerca que estés: la persecución existe para conseguirlo.`,
   },
   {
     icon: Heart,
     title: "La salud",
     body: "Arrancás en 100%. Cada decisión puede costarte vida y cuanto más alto el peligro, más podés perder de un solo golpe. Si llega a 0%, la partida termina ahí: no hay guardado ni segunda oportunidad.",
+  },
+  {
+    icon: Skull,
+    title: "La confrontación final",
+    body: `El Infectado 0 tiene ${BOSS_HEALTH} de vida propia y no muere de un golpe: cada turno de pelea te contraataca por ${BOSS_ATTACK} de salud, sin excepción. El daño que le hacés depende de con qué peleás: mucho más con el objeto clave que con cualquier otra cosa. El combate dura varios turnos incluso jugando perfecto.`,
   },
   {
     icon: Biohazard,
@@ -55,7 +64,12 @@ const RULES: Rule[] = [
   {
     icon: PenLine,
     title: "El instinto",
-    body: `Además de elegir entre las opciones, podés escribir tu propia acción, pero sólo ${STARTING_INSTINCT} veces por partida y en un máximo de ${IMPROVISE_MAX_CHARS} caracteres. Guardalos para cuando ninguna opción te sirva.`,
+    body: `Además de elegir entre las opciones, podés escribir tu propia acción, pero sólo ${STARTING_INSTINCT} veces por partida y en un máximo de ${IMPROVISE_MAX_CHARS} caracteres. Guardalos para cuando ninguna opción te sirva: contra el Infectado 0, improvisar también pega bastante más fuerte que elegir una opción.`,
+  },
+  {
+    icon: KeyRound,
+    title: "Las pistas",
+    body: "No aparecen todos los turnos: hace falta que haya pasado un tiempo desde la última y que la escena tenga algo de riesgo. En una escena totalmente segura no vas a encontrar ninguna.",
   },
 ];
 
@@ -70,7 +84,7 @@ const CANNOT_DO = [
   "Usar un objeto que no figure en tu inventario.",
   "Ganar peleas imposibles: escribir «los mato a todos» se narra como un fracaso costoso, no como una victoria.",
   "Contar con que algo salga bien: ninguna acción tiene éxito automático.",
-  "Matar al Infectado 0 sin un arma u objeto clave encima.",
+  "Cruzar a la confrontación, o matar al Infectado 0, sin el objeto clave encima.",
 ];
 
 export default function HowToPlay({ onClose }: { onClose: () => void }) {
